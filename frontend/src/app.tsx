@@ -88,10 +88,7 @@ export default function App() {
   const [editUnlockedByImage, setEditUnlockedByImage] = useState<Record<string, boolean>>({});
   const [vertexCountByImage, setVertexCountByImage] = useState<Record<string, number>>({});
   const editUnlockedByImageRef = useRef<Record<string, boolean>>({});
-  const [lockOwnerByImage, setLockOwnerByImage] = useState<Record<string, string | null>>({});
   const [scale, setScale] = useState(DEFAULT_SCALE);
-  const [assignedUser, setAssignedUser] = useState('');
-  const [isAssignedUserLocked, setIsAssignedUserLocked] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Upload an image to start annotating.');
   const [showAnnotation, setShowAnnotation] = useState(true);
   const [showMagnifier, setShowMagnifier] = useState(true);
@@ -157,7 +154,6 @@ export default function App() {
   const isActiveImageEditUnlocked = activeImage ? Boolean(editUnlockedByImage[activeImage.id]) : false;
   const isStageLocked = canAnnotate && (activeImageStatus === 'completed' || activeImageStatus === 'no_action') && !isActiveImageEditUnlocked;
   const canEditAnnotation = canAnnotate && !isStageLocked;
-  const isUserAssigned = assignedUser.trim().length > 0;
   const hasAllVertices = activeVertexKeys.every((key) => {
     const point = activeGroundTruth[key];
     return point.x !== null && point.y !== null;
@@ -175,17 +171,15 @@ export default function App() {
     return point.x !== null && point.y !== null;
   }).length;
   const missingVertexCount = activeVertexKeys.length - filledVertexCount;
-  const canSaveCurrent = canEditAnnotation && isUserAssigned && hasAllVertices && !hasNegativeCoordinates && !hasOutOfBoundsCoordinates;
+  const canSaveCurrent = canEditAnnotation && hasAllVertices && !hasNegativeCoordinates && !hasOutOfBoundsCoordinates;
   const canDownloadGroundTruth = canAnnotate && activeImageStatus === 'completed';
-  const canNoAction = canAnnotate && activeImageStatus !== 'completed' && activeImageStatus !== 'no_action' && isUserAssigned;
+  const canNoAction = canAnnotate && activeImageStatus !== 'completed' && activeImageStatus !== 'no_action';
   const saveBlockedReason = !canAnnotate
     ? 'Select an image to enable Save.'
     : isStageLocked
       ? 'Image is locked after save. Click Unlock to edit.'
-    : !isUserAssigned
-      ? 'Assign user before saving.'
       : !hasAllVertices
-        ? `Fill all six vertices before saving (${missingVertexCount} missing).`
+        ? `Fill all vertices before saving (${missingVertexCount} missing).`
         : hasNegativeCoordinates
           ? 'One or more coordinates are negative. Adjust points within the image bounds.'
           : hasOutOfBoundsCoordinates
@@ -256,78 +250,15 @@ export default function App() {
     setQaStatusByImage((prev) => ({ ...prev, [imageId]: status }));
   };
 
-  const acquireLock = async (image: QAImage): Promise<boolean> => {
-    const user = assignedUser.trim();
-    if (!user) {
-      return true;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/lock`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_id: image.id, image_name: image.name, assigned_user: user })
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.detail ?? 'Lock failed');
-      }
-
-      setLockOwnerByImage((prev) => ({ ...prev, [image.id]: user }));
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Lock failed';
-      setStatusMessage(message);
-      return false;
-    }
-  };
-
-  const releaseLock = async (image: QAImage | null) => {
-    if (!image) {
-      return;
-    }
-
-    const owner = lockOwnerByImage[image.id];
-    if (!owner) {
-      return;
-    }
-
-    try {
-      await fetch(`${API_BASE_URL}/api/unlock`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_id: image.id, image_name: image.name, assigned_user: owner })
-      });
-      setLockOwnerByImage((prev) => ({ ...prev, [image.id]: null }));
-    } catch {
-      // Ignore unlock failures on client-side navigation.
-    }
-  };
-
-  const selectImageWithLock = async (image: QAImage) => {
+  const selectImage = (image: QAImage) => {
     if (activeImage && activeImage.id === image.id) {
       setPage('studio');
       return;
     }
 
-    // If no user is assigned, still allow browsing between thumbnails.
-    // Locking is enabled automatically once a user is provided.
-    if (!assignedUser.trim()) {
-      setActiveImageId(image.id);
-      setPage('studio');
-      setStatusMessage(`Opened ${image.name}. No user assigned yet.`);
-      return;
-    }
-
-    const ok = await acquireLock(image);
-    if (!ok) {
-      return;
-    }
-
-    await releaseLock(activeImage);
     setActiveImageId(image.id);
     setPage('studio');
+    setStatusMessage(`Opened ${image.name}.`);
   };
 
   const setPoint = (pointKey: string, nextPoint: AnnotationPoint) => {
@@ -524,49 +455,11 @@ export default function App() {
   }, [page, activeImageId]);
 
   useEffect(() => {
-    const loadCurrentUser = async () => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/me`);
-        const data = await response.json();
-        const user = typeof data?.user === 'string' ? data.user.trim() : '';
-        if (response.ok && user) {
-          setAssignedUser(user);
-          setIsAssignedUserLocked(true);
-          setStatusMessage(`Signed in as ${user}. Requests will auto-assign to you.`);
-        }
-      } catch {
-        // Keep manual assignment as fallback in local/dev mode.
-      }
-    };
-
-    void loadCurrentUser();
-  }, []);
-
-
-  useEffect(() => {
     if (imgStatus !== 'failed' || !activeImageId) {
       return;
     }
     void refreshImageUrl(activeImageId);
   }, [imgStatus, activeImageId]);
-
-  // Heartbeat: refresh the lock every 5 min so it doesn't expire while the user is active.
-  // If the browser closes without calling releaseLock, the lock auto-expires after 10 min.
-  useEffect(() => {
-    if (!activeImage || !assignedUser.trim()) return;
-    const interval = setInterval(async () => {
-      try {
-        await fetch(`${API_BASE_URL}/api/lock-heartbeat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_id: activeImage.id, image_name: activeImage.name, assigned_user: assignedUser.trim() }),
-        });
-      } catch {
-        // Non-fatal — lock will auto-expire if the browser truly closes.
-      }
-    }, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [activeImage?.id, assignedUser]);
 
   const resetPointsForActiveImage = () => {
     if (!activeImage || !canEditAnnotation) {
@@ -661,17 +554,11 @@ export default function App() {
       return;
     }
 
-    if (!isUserAssigned) {
-      setStatusMessage('Assign user before saving.');
-      return;
-    }
-
     if (!hasAllVertices) {
-      setStatusMessage('Fill all six vertices before saving.');
+      setStatusMessage('Fill all vertices before saving.');
       return;
     }
 
-    const saveUser = assignedUser.trim();
     const sanitizedGroundTruth = buildSanitizedGroundTruth();
 
     try {
@@ -681,10 +568,8 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          assigned_user: saveUser,
           image_id: activeImage.id,
           image_name: activeImage.name,
-          qa_status: 'completed',
           ground_truth: sanitizedGroundTruth
         })
       });
@@ -699,7 +584,7 @@ export default function App() {
       setCompletionMetaByImage((prev) => ({
         ...prev,
         [activeImage.id]: {
-          user: saveUser,
+          user: '',
           updatedAt: typeof data?.updated_at === 'string' ? data.updated_at : new Date().toISOString()
         }
       }));
@@ -716,7 +601,7 @@ export default function App() {
 
       const shouldSwitch = window.confirm(promptMessage);
       if (shouldSwitch && nextImage) {
-        await selectImageWithLock(nextImage);
+        selectImage(nextImage);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -732,12 +617,6 @@ export default function App() {
       return;
     }
 
-    const unlockUser = assignedUser.trim();
-    if (!unlockUser) {
-      setStatusMessage('Assign user before unlocking.');
-      return;
-    }
-
     try {
       const response = await fetch(`${API_BASE_URL}/api/stage-unlock`, {
         method: 'POST',
@@ -745,7 +624,6 @@ export default function App() {
         body: JSON.stringify({
           image_id: image.id,
           image_name: image.name,
-          assigned_user: unlockUser,
         }),
       });
 
@@ -758,7 +636,7 @@ export default function App() {
       setCompletionMetaByImage((prev) => ({
         ...prev,
         [image.id]: {
-          user: unlockUser,
+          user: '',
           updatedAt: typeof data?.updated_at === 'string' ? data.updated_at : new Date().toISOString(),
         },
       }));
@@ -782,16 +660,12 @@ export default function App() {
 
   const markNoAction = async () => {
     if (!activeImage) return;
-    if (!assignedUser.trim()) {
-      setStatusMessage('Assign user before marking no action.');
-      return;
-    }
     try {
       setStatusMessage('Marking as no action...');
       const response = await fetch(`${API_BASE_URL}/api/no-action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_id: activeImage.id, image_name: activeImage.name, assigned_user: assignedUser.trim() }),
+        body: JSON.stringify({ image_id: activeImage.id, image_name: activeImage.name }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.detail ?? 'Failed');
@@ -981,7 +855,7 @@ export default function App() {
                           <button
                             className="qa-gallery-open"
                             onClick={() => {
-                              void selectImageWithLock(image);
+                              selectImage(image);
                             }}
                             type="button"
                           >
@@ -1032,7 +906,6 @@ export default function App() {
                             <span className="qa-gallery-title" title={image.id}>{image.id}</span>
                             {status === 'completed' && completionMetaByImage[image.id] && (
                               <div className="qa-gallery-meta">
-                                <span className="qa-gallery-meta-user">User: {completionMetaByImage[image.id].user}</span>
                                 <span className="qa-gallery-meta-time">Updated: {formatUpdatedAt(completionMetaByImage[image.id].updatedAt)}</span>
                               </div>
                             )}
@@ -1190,19 +1063,6 @@ export default function App() {
                             </Stage>
                           </section>
                         )}
-          <section className="qa-card">
-            <h2>Session Setup</h2>
-            <label>
-              {isAssignedUserLocked ? 'Logged In User' : 'Assign User'}
-              <input
-                value={assignedUser}
-                onChange={(event) => setAssignedUser(event.target.value)}
-                readOnly={isAssignedUserLocked}
-              />
-            </label>
-          </section>
-
-
           <section className="qa-card">
             <h2>Zoom</h2>
             <div className="qa-row">
