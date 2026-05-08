@@ -62,8 +62,7 @@ class TestAnnotations:
                 "vertex_1": {"x": 450, "y": 160},
                 "vertex_2": {"x": 460, "y": 500},
                 "vertex_3": {"x": 110, "y": 490}
-            },
-            "assigned_user": "alice"
+            }
         }
 
         response = client.post("/api/calibrate", json=payload)
@@ -82,8 +81,7 @@ class TestAnnotations:
                 "vertex_1": {"x": 450, "y": 160},
                 "vertex_2": {"x": 460, "y": 500},
                 "vertex_3": {"x": 110, "y": 490}
-            },
-            "assigned_user": "bob"
+            }
         }
         client.post("/api/calibrate", json=payload)
 
@@ -92,7 +90,6 @@ class TestAnnotations:
         assert response.status_code == 200
         data = response.json()
         assert data["image_id"] == "test-img-2"
-        assert data["assigned_user"] == "bob"
         assert len(data["ground_truth"]) == 4
 
     def test_get_annotation_not_found(self, client, mock_db):
@@ -113,8 +110,7 @@ class TestAnnotations:
                     "vertex_1": {"x": 450, "y": 160},
                     "vertex_2": {"x": 460, "y": 500},
                     "vertex_3": {"x": 110, "y": 490}
-                },
-                "assigned_user": "alice"
+                }
             }
             client.post("/api/calibrate", json=payload)
 
@@ -136,8 +132,7 @@ class TestAnnotations:
                 "vertex_1": {"x": 450, "y": 160},
                 "vertex_2": {"x": 460, "y": 500},
                 "vertex_3": {"x": 110, "y": 490}
-            },
-            "assigned_user": "charlie"
+            }
         }
         client.post("/api/calibrate", json=payload)
 
@@ -153,56 +148,6 @@ class TestAnnotations:
     def test_delete_annotation_not_found(self, client, mock_db):
         """Delete non-existent annotation should return 404."""
         response = client.delete("/api/annotations/nonexistent")
-        assert response.status_code == 404
-
-
-class TestLocks:
-    """Lock management endpoint tests."""
-
-    def test_acquire_lock(self, client, mock_db):
-        """Acquire lock should create lock entry."""
-        payload = {"user": "alice"}
-        response = client.post("/api/lock/img-1", json=payload)
-        assert response.status_code == 200
-        assert response.json()["status"] == "locked"
-        assert response.json()["user"] == "alice"
-
-    def test_lock_conflict(self, client, mock_db):
-        """Acquiring lock for already-locked image should fail."""
-        # Acquire lock as alice
-        client.post("/api/lock/img-1", json={"user": "alice"})
-
-        # Try to acquire as bob
-        response = client.post("/api/lock/img-1", json={"user": "bob"})
-        assert response.status_code == 409
-        assert "locked" in response.json()["detail"].lower()
-
-    def test_release_lock(self, client, mock_db):
-        """Release lock should remove lock entry."""
-        # Acquire lock
-        client.post("/api/lock/img-1", json={"user": "alice"})
-
-        # Release it
-        response = client.post("/api/unlock/img-1", json={"user": "alice"})
-        assert response.status_code == 200
-        assert response.json()["status"] == "unlocked"
-
-        # Now bob should be able to lock it
-        response = client.post("/api/lock/img-1", json={"user": "bob"})
-        assert response.status_code == 200
-
-    def test_release_lock_wrong_user(self, client, mock_db):
-        """Releasing lock owned by another user should fail."""
-        # Acquire lock as alice
-        client.post("/api/lock/img-1", json={"user": "alice"})
-
-        # Try to release as bob
-        response = client.post("/api/unlock/img-1", json={"user": "bob"})
-        assert response.status_code == 404
-
-    def test_release_nonexistent_lock(self, client, mock_db):
-        """Releasing non-existent lock should return 404."""
-        response = client.post("/api/unlock/nonexistent", json={"user": "alice"})
         assert response.status_code == 404
 
 
@@ -227,8 +172,7 @@ class TestModels:
             ground_truth={
                 "vertex_0": Point(x=100, y=150),
                 "vertex_1": Point(x=450, y=160)
-            },
-            assigned_user="alice"
+            }
         )
         assert request.image_id == "test"
         assert len(request.ground_truth) == 2
