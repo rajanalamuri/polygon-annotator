@@ -4,7 +4,6 @@ Tests core functionality: annotations, locks, and health checks.
 """
 
 import pytest
-from fastapi.testclient import TestClient
 from mongomock import MongoClient
 import sys
 import os
@@ -12,15 +11,15 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import app, init_db, close_db, db
-import main as main_module
-
 
 @pytest.fixture
 def mock_db(monkeypatch):
     """Mock MongoDB with mongomock for testing."""
     # Use mongomock instead of real MongoDB
     mock_client = MongoClient()
+
+    # Mock before importing app to prevent MongoDB connection attempts
+    import main as main_module
     monkeypatch.setattr(main_module, 'client', mock_client)
     monkeypatch.setattr(main_module, 'db', mock_client['polygon_annotator_test'])
 
@@ -33,6 +32,9 @@ def mock_db(monkeypatch):
 @pytest.fixture
 def client(mock_db):
     """FastAPI test client."""
+    from starlette.testclient import TestClient
+    from main import app
+
     return TestClient(app)
 
 
